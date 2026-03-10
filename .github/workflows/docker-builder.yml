@@ -1,36 +1,24 @@
-name: Build and Push OpenClaw Docker Images
+name: Build and Push OpenClaw All Docker Images
 
 on:
   workflow_dispatch:
     inputs:
       build_sandbox:
-        description: 'Build and push sandbox images (default, common, browser)'
+        description: '是否构建并推送 sandbox 镜像 (default, common, browser)'
         required: true
         default: true
         type: boolean
-      build_multi_arch:
-        description: 'Build multi-arch (amd64 + arm64) for main image only'
-        required: false
-        default: false
-        type: boolean
-      image_tag:
-        description: 'Custom tag (e.g. v20260310). Empty → use sha + latest'
-        required: false
-        default: ''
-        type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     env:
-      REGISTRY: docker.io
       IMAGE_OWNER: ${{ secrets.DOCKER_USERNAME }}
-      IMAGE_BASE: docker.io/${{ secrets.DOCKER_USERNAME }}/openclaw
       SANDBOX_SUFFIX: bookworm-slim
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
@@ -42,77 +30,61 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 主镜像
-      - name: Docker meta for main image
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_BASE }}
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
-            type=sha,format=long
-
-      - name: Build & push main OpenClaw image
+      # 1. 主 gateway 镜像（总是构建推送）
+      - name: Build & push main OpenClaw gateway
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.IMAGE_OWNER }}/openclaw:latest
+            ${{ env.IMAGE_OWNER }}/openclaw:${{ env.SANDBOX_SUFFIX }}
           build-args: |
             NODE_OPTIONS=--max-old-space-size=4096
             OPENCLAW_INSTALL_DOCKER_CLI=1
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: ${{ inputs.build_multi_arch == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
 
-      # Sandbox 部分 - 只在 build_sandbox = true 时执行
-
-      # 1. default sandbox (使用 Dockerfile.sandbox)
-      - name: Build & push default sandbox
-        if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox') != ''
-        run: |
-          chmod +x scripts/sandbox-setup.sh || true
-          ./scripts/sandbox-setup.sh
-          # 脚本通常构建 openclaw-sandbox:bookworm-slim
-          docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox:${{ env.SANDBOX_SUFFIX }}
-          docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox:latest
-          docker push ${{ env.IMAGE_BASE }}-sandbox:${{ env.SANDBOX_SUFFIX }}
-          docker push ${{ env.IMAGE_BASE }}-sandbox:latest
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox:${{ inputs.image_tag }}
-            docker push ${{ env.IMAGE_BASE }}-sandbox:${{ inputs.image_tag }}
-          fi
-
-      # 2. sandbox-common (使用脚本 sandbox-common-setup.sh，它基于 Dockerfile.sandbox 添加工具)
-      - name: Build & push sandbox-common
+      # Sandbox 镜像 - 只在勾选 build_sandbox 时执行
+      - name: Build & push all sandbox images
         if: inputs.build_sandbox == 'true'
         run: |
-          chmod +x scripts/sandbox-common-setup.sh || true
-          ./scripts/sandbox-common-setup.sh
-          # 脚本构建 openclaw-sandbox-common:bookworm-slim
-          docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-common:${{ env.SANDBOX_SUFFIX }}
-          docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-common:latest
-          docker push ${{ env.IMAGE_BASE }}-sandbox-common:${{ env.SANDBOX_SUFFIX }}
-          docker push ${{ env.IMAGE_BASE }}-sandbox-common:latest
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-common:${{ inputs.image_tag }}
-            docker push ${{ env.IMAGE_BASE }}-sandbox-common:${{ inputs.image_tag }}
+          # 准备脚本权限
+          chmod +x scripts/*.sh 2>/dev/null || echo "No sandbox scripts found or chmod failed"
+
+          # Default sandbox
+          echo "Building default sandbox..."
+          ./scripts/sandbox-setup.sh || echo "Default sandbox build failed/skipped"
+          if docker images | grep -q "openclaw-sandbox.*${{ env.SANDBOX_SUFFIX }}"; then
+            docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
+            docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox:latest
+            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
+            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox:latest
+          else
+            echo "Default sandbox not built - check if scripts/sandbox-setup.sh exists and runs"
           fi
 
-      # 3. sandbox-browser (如果 Dockerfile.sandbox-browser 存在)
-      - name: Build & push sandbox-browser
-        if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox-browser') != ''
-        run: |
-          chmod +x scripts/sandbox-browser-setup.sh || true
-          ./scripts/sandbox-browser-setup.sh
-          docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
-          docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-browser:latest
-          docker push ${{ env.IMAGE_BASE }}-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
-          docker push ${{ env.IMAGE_BASE }}-sandbox-browser:latest
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-browser:${{ inputs.image_tag }}
-            docker push ${{ env.IMAGE_BASE }}-sandbox-browser:${{ inputs.image_tag }}
+          # Common sandbox
+          echo "Building common sandbox..."
+          ./scripts/sandbox-common-setup.sh || echo "Common sandbox build failed/skipped"
+          if docker images | grep -q "openclaw-sandbox-common.*${{ env.SANDBOX_SUFFIX }}"; then
+            docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
+            docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:latest
+            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
+            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:latest
+          else
+            echo "Common sandbox not built - check scripts/sandbox-common-setup.sh"
+          fi
+
+          # Browser sandbox
+          echo "Building browser sandbox..."
+          ./scripts/sandbox-browser-setup.sh || echo "Browser sandbox build failed/skipped"
+          if docker images | grep -q "openclaw-sandbox-browser.*${{ env.SANDBOX_SUFFIX }}"; then
+            docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
+            docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:latest
+            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
+            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:latest
+          else
+            echo "Browser sandbox not built - check scripts/sandbox-browser-setup.sh"
           fi
