@@ -42,7 +42,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 主镜像 - metadata + build & push
+      # 主镜像
       - name: Docker meta for main image
         id: meta
         uses: docker/metadata-action@v5
@@ -68,86 +68,51 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: ${{ inputs.build_multi_arch == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
 
-      # ────────────────────────────── Sandbox 部分 ──────────────────────────────
-      # 只在 build_sandbox = true 且對應 Dockerfile 存在時執行
+      # Sandbox 部分 - 只在 build_sandbox = true 时执行
 
-      # 1. default sandbox (極簡版)
-      - name: Build sandbox-default locally
+      # 1. default sandbox (使用 Dockerfile.sandbox)
+      - name: Build & push default sandbox
         if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox') != ''
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.sandbox
-          push: false
-          tags: openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Tag & push sandbox-default
-        if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox') != ''
-        shell: bash
         run: |
-          local_tag="openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}"
-          remote_base="${{ env.IMAGE_BASE }}-sandbox"
-          docker tag $local_tag $remote_base:${{ env.SANDBOX_SUFFIX }}
-          docker tag $local_tag $remote_base:latest
-          docker push $remote_base:${{ env.SANDBOX_SUFFIX }}
-          docker push $remote_base:latest
+          chmod +x scripts/sandbox-setup.sh || true
+          ./scripts/sandbox-setup.sh
+          # 脚本通常构建 openclaw-sandbox:bookworm-slim
+          docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox:${{ env.SANDBOX_SUFFIX }}
+          docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox:latest
+          docker push ${{ env.IMAGE_BASE }}-sandbox:${{ env.SANDBOX_SUFFIX }}
+          docker push ${{ env.IMAGE_BASE }}-sandbox:latest
           if [ -n "${{ inputs.image_tag }}" ]; then
-            docker tag $local_tag $remote_base:${{ inputs.image_tag }}
-            docker push $remote_base:${{ inputs.image_tag }}
+            docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox:${{ inputs.image_tag }}
+            docker push ${{ env.IMAGE_BASE }}-sandbox:${{ inputs.image_tag }}
           fi
 
-      # 2. sandbox-common (推薦，含 git/curl/python 等工具)
-      - name: Build sandbox-common locally
-        if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox-common') != ''
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.sandbox-common
-          push: false
-          tags: openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Tag & push sandbox-common
-        if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox-common') != ''
-        shell: bash
+      # 2. sandbox-common (使用脚本 sandbox-common-setup.sh，它基于 Dockerfile.sandbox 添加工具)
+      - name: Build & push sandbox-common
+        if: inputs.build_sandbox == 'true'
         run: |
-          local_tag="openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}"
-          remote_base="${{ env.IMAGE_BASE }}-sandbox-common"
-          docker tag $local_tag $remote_base:${{ env.SANDBOX_SUFFIX }}
-          docker tag $local_tag $remote_base:latest
-          docker push $remote_base:${{ env.SANDBOX_SUFFIX }}
-          docker push $remote_base:latest
+          chmod +x scripts/sandbox-common-setup.sh || true
+          ./scripts/sandbox-common-setup.sh
+          # 脚本构建 openclaw-sandbox-common:bookworm-slim
+          docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-common:${{ env.SANDBOX_SUFFIX }}
+          docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-common:latest
+          docker push ${{ env.IMAGE_BASE }}-sandbox-common:${{ env.SANDBOX_SUFFIX }}
+          docker push ${{ env.IMAGE_BASE }}-sandbox-common:latest
           if [ -n "${{ inputs.image_tag }}" ]; then
-            docker tag $local_tag $remote_base:${{ inputs.image_tag }}
-            docker push $remote_base:${{ inputs.image_tag }}
+            docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-common:${{ inputs.image_tag }}
+            docker push ${{ env.IMAGE_BASE }}-sandbox-common:${{ inputs.image_tag }}
           fi
 
-      # 3. sandbox-browser (瀏覽器工具必須)
-      - name: Build sandbox-browser locally
+      # 3. sandbox-browser (如果 Dockerfile.sandbox-browser 存在)
+      - name: Build & push sandbox-browser
         if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox-browser') != ''
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.sandbox-browser
-          push: false
-          tags: openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Tag & push sandbox-browser
-        if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox-browser') != ''
-        shell: bash
         run: |
-          local_tag="openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}"
-          remote_base="${{ env.IMAGE_BASE }}-sandbox-browser"
-          docker tag $local_tag $remote_base:${{ env.SANDBOX_SUFFIX }}
-          docker tag $local_tag $remote_base:latest
-          docker push $remote_base:${{ env.SANDBOX_SUFFIX }}
-          docker push $remote_base:latest
+          chmod +x scripts/sandbox-browser-setup.sh || true
+          ./scripts/sandbox-browser-setup.sh
+          docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
+          docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-browser:latest
+          docker push ${{ env.IMAGE_BASE }}-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
+          docker push ${{ env.IMAGE_BASE }}-sandbox-browser:latest
           if [ -n "${{ inputs.image_tag }}" ]; then
-            docker tag $local_tag $remote_base:${{ inputs.image_tag }}
-            docker push $remote_base:${{ inputs.image_tag }}
+            docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_BASE }}-sandbox-browser:${{ inputs.image_tag }}
+            docker push ${{ env.IMAGE_BASE }}-sandbox-browser:${{ inputs.image_tag }}
           fi
