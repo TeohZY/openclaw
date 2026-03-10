@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       build_sandbox:
-        description: '是否构建并推送 sandbox 镜像 (default, common, browser)'
-        required: true
+        description: 'Build and push sandbox images (default, common, browser)'
+        required: false
         default: true
         type: boolean
 
@@ -30,7 +30,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 1. 主 gateway 镜像（总是构建推送）
+      # 主镜像（保持成功部分）
       - name: Build & push main OpenClaw gateway
         uses: docker/build-push-action@v6
         with:
@@ -46,45 +46,66 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Sandbox 镜像 - 只在勾选 build_sandbox 时执行
-      - name: Build & push all sandbox images
-        if: inputs.build_sandbox == 'true'
+      # Sandbox 构建 - 强制运行 + 详细 debug
+      - name: Build & push sandbox images (debug mode)
         run: |
-          # 准备脚本权限
-          chmod +x scripts/*.sh 2>/dev/null || echo "No sandbox scripts found or chmod failed"
+          echo "=== DEBUG: Starting sandbox build section ==="
+          echo "Current directory: $(pwd)"
+          ls -la scripts/ || echo "scripts/ directory NOT FOUND or empty!"
+          ls -la Dockerfile* || echo "No Dockerfile.sandbox* found!"
 
           # Default sandbox
-          echo "Building default sandbox..."
-          ./scripts/sandbox-setup.sh || echo "Default sandbox build failed/skipped"
-          if docker images | grep -q "openclaw-sandbox.*${{ env.SANDBOX_SUFFIX }}"; then
-            docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
-            docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox:latest
-            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
-            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox:latest
+          echo "=== Building default sandbox ==="
+          if [ -f "scripts/sandbox-setup.sh" ]; then
+            chmod +x scripts/sandbox-setup.sh
+            ./scripts/sandbox-setup.sh || echo "Default sandbox script failed!"
+            if docker images | grep -q "openclaw-sandbox.*${{ env.SANDBOX_SUFFIX }}"; then
+              docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
+              docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox:latest
+              docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
+              docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox:latest
+              echo "Default sandbox pushed successfully!"
+            else
+              echo "Default sandbox image not found after script!"
+            fi
           else
-            echo "Default sandbox not built - check if scripts/sandbox-setup.sh exists and runs"
+            echo "scripts/sandbox-setup.sh NOT FOUND - skipping default"
           fi
 
           # Common sandbox
-          echo "Building common sandbox..."
-          ./scripts/sandbox-common-setup.sh || echo "Common sandbox build failed/skipped"
-          if docker images | grep -q "openclaw-sandbox-common.*${{ env.SANDBOX_SUFFIX }}"; then
-            docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
-            docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:latest
-            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
-            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:latest
+          echo "=== Building common sandbox ==="
+          if [ -f "scripts/sandbox-common-setup.sh" ]; then
+            chmod +x scripts/sandbox-common-setup.sh
+            ./scripts/sandbox-common-setup.sh || echo "Common sandbox script failed!"
+            if docker images | grep -q "openclaw-sandbox-common.*${{ env.SANDBOX_SUFFIX }}"; then
+              docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
+              docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:latest
+              docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
+              docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:latest
+              echo "Common sandbox pushed successfully!"
+            else
+              echo "Common sandbox image not found after script!"
+            fi
           else
-            echo "Common sandbox not built - check scripts/sandbox-common-setup.sh"
+            echo "scripts/sandbox-common-setup.sh NOT FOUND - skipping common"
           fi
 
           # Browser sandbox
-          echo "Building browser sandbox..."
-          ./scripts/sandbox-browser-setup.sh || echo "Browser sandbox build failed/skipped"
-          if docker images | grep -q "openclaw-sandbox-browser.*${{ env.SANDBOX_SUFFIX }}"; then
-            docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
-            docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:latest
-            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
-            docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:latest
+          echo "=== Building browser sandbox ==="
+          if [ -f "scripts/sandbox-browser-setup.sh" ]; then
+            chmod +x scripts/sandbox-browser-setup.sh
+            ./scripts/sandbox-browser-setup.sh || echo "Browser sandbox script failed!"
+            if docker images | grep -q "openclaw-sandbox-browser.*${{ env.SANDBOX_SUFFIX }}"; then
+              docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
+              docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:latest
+              docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
+              docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:latest
+              echo "Browser sandbox pushed successfully!"
+            else
+              echo "Browser sandbox image not found after script!"
+            fi
           else
-            echo "Browser sandbox not built - check scripts/sandbox-browser-setup.sh"
+            echo "scripts/sandbox-browser-setup.sh NOT FOUND - skipping browser"
           fi
+
+          echo "=== DEBUG: Sandbox section finished ==="
