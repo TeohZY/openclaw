@@ -1,13 +1,7 @@
-name: Build and Push OpenClaw All Docker Images
+name: Build and Push OpenClaw All Docker Images - Debug
 
 on:
-  workflow_dispatch:
-    inputs:
-      build_sandbox:
-        description: 'Build and push sandbox images (default, common, browser)'
-        required: false
-        default: true
-        type: boolean
+  workflow_dispatch:  # 无 inputs，直接强制构建所有
 
 jobs:
   build:
@@ -30,7 +24,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 主镜像（保持成功部分）
+      # 主镜像（已成功，无需改）
       - name: Build & push main OpenClaw gateway
         uses: docker/build-push-action@v6
         with:
@@ -46,66 +40,75 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Sandbox 构建 - 强制运行 + 详细 debug
-      - name: Build & push sandbox images (debug mode)
+      # Sandbox 强制 debug 步骤（无 if，直接跑）
+      - name: Debug and Build Sandbox Images
         run: |
-          echo "=== DEBUG: Starting sandbox build section ==="
-          echo "Current directory: $(pwd)"
-          ls -la scripts/ || echo "scripts/ directory NOT FOUND or empty!"
-          ls -la Dockerfile* || echo "No Dockerfile.sandbox* found!"
+          echo "=== DEBUG START: pwd = $(pwd) ==="
+          ls -la . || echo "Current dir empty?"
+          ls -la scripts/ || echo "scripts/ NOT FOUND !!! This is likely the issue."
+          ls -la Dockerfile* || echo "No Dockerfile found."
+
+          echo "Listing available scripts:"
+          find scripts -type f -name "*.sh" || echo "No sh files in scripts/"
 
           # Default sandbox
-          echo "=== Building default sandbox ==="
+          echo "=== Attempting default sandbox ==="
           if [ -f "scripts/sandbox-setup.sh" ]; then
+            echo "Found sandbox-setup.sh, executing..."
             chmod +x scripts/sandbox-setup.sh
-            ./scripts/sandbox-setup.sh || echo "Default sandbox script failed!"
+            ./scripts/sandbox-setup.sh 2>&1 | tee default-build.log || echo "Default script failed!"
+            cat default-build.log || true
             if docker images | grep -q "openclaw-sandbox.*${{ env.SANDBOX_SUFFIX }}"; then
               docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
               docker tag openclaw-sandbox:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox:latest
               docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
               docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox:latest
-              echo "Default sandbox pushed successfully!"
+              echo "Default sandbox SUCCESS!"
             else
-              echo "Default sandbox image not found after script!"
+              echo "Default sandbox image MISSING after script!"
             fi
           else
-            echo "scripts/sandbox-setup.sh NOT FOUND - skipping default"
+            echo "CRITICAL: scripts/sandbox-setup.sh NOT FOUND in repo!"
           fi
 
           # Common sandbox
-          echo "=== Building common sandbox ==="
+          echo "=== Attempting common sandbox ==="
           if [ -f "scripts/sandbox-common-setup.sh" ]; then
+            echo "Found sandbox-common-setup.sh, executing..."
             chmod +x scripts/sandbox-common-setup.sh
-            ./scripts/sandbox-common-setup.sh || echo "Common sandbox script failed!"
+            ./scripts/sandbox-common-setup.sh 2>&1 | tee common-build.log || echo "Common script failed!"
+            cat common-build.log || true
             if docker images | grep -q "openclaw-sandbox-common.*${{ env.SANDBOX_SUFFIX }}"; then
               docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
               docker tag openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:latest
               docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}
               docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-common:latest
-              echo "Common sandbox pushed successfully!"
+              echo "Common sandbox SUCCESS!"
             else
-              echo "Common sandbox image not found after script!"
+              echo "Common sandbox image MISSING after script!"
             fi
           else
-            echo "scripts/sandbox-common-setup.sh NOT FOUND - skipping common"
+            echo "CRITICAL: scripts/sandbox-common-setup.sh NOT FOUND in repo!"
           fi
 
           # Browser sandbox
-          echo "=== Building browser sandbox ==="
+          echo "=== Attempting browser sandbox ==="
           if [ -f "scripts/sandbox-browser-setup.sh" ]; then
+            echo "Found sandbox-browser-setup.sh, executing..."
             chmod +x scripts/sandbox-browser-setup.sh
-            ./scripts/sandbox-browser-setup.sh || echo "Browser sandbox script failed!"
+            ./scripts/sandbox-browser-setup.sh 2>&1 | tee browser-build.log || echo "Browser script failed!"
+            cat browser-build.log || true
             if docker images | grep -q "openclaw-sandbox-browser.*${{ env.SANDBOX_SUFFIX }}"; then
               docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
               docker tag openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }} ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:latest
               docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}
               docker push ${{ env.IMAGE_OWNER }}/openclaw-sandbox-browser:latest
-              echo "Browser sandbox pushed successfully!"
+              echo "Browser sandbox SUCCESS!"
             else
-              echo "Browser sandbox image not found after script!"
+              echo "Browser sandbox image MISSING after script!"
             fi
           else
-            echo "scripts/sandbox-browser-setup.sh NOT FOUND - skipping browser"
+            echo "CRITICAL: scripts/sandbox-browser-setup.sh NOT FOUND in repo!"
           fi
 
-          echo "=== DEBUG: Sandbox section finished ==="
+          echo "=== DEBUG END: Sandbox attempt finished ==="
