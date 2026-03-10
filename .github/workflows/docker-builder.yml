@@ -19,15 +19,17 @@ on:
         default: ''
         type: string
 
-env:
-  REGISTRY: docker.io
-  IMAGE_OWNER: ${{ secrets.DOCKER_USERNAME }}
-  IMAGE_BASE: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/openclaw
-  SANDBOX_SUFFIX: bookworm-slim
-
+# 移除顶层 env，改用 job-level env 或直接写值（避免 unrecognized env）
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # 在 job 级别定义 env，这样在 steps 里 ${{ env.XXX }} 更可靠
+    env:
+      REGISTRY: docker.io
+      IMAGE_OWNER: ${{ secrets.DOCKER_USERNAME }}
+      IMAGE_BASE: docker.io/${{ secrets.DOCKER_USERNAME }}/openclaw   # 直接拼接，避免 env.REGISTRY
+      SANDBOX_SUFFIX: bookworm-slim
 
     steps:
       - name: Checkout
@@ -42,7 +44,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 主镜像（gateway） - 使用 metadata 生成 tags，直接 push
+      # 主镜像 meta - images 直接用 env.IMAGE_BASE（job env 可用）
       - name: Docker meta for main image
         id: meta
         uses: docker/metadata-action@v5
@@ -66,18 +68,17 @@ jobs:
             OPENCLAW_INSTALL_DOCKER_CLI=1
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: ${{ inputs.build_multi_arch == 'true' && 'linux/amd64,linux/arm64' || '' }}
+          # platforms 用 inputs 直接判断，避免 env 问题
+          platforms: ${{ inputs.build_multi_arch == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
 
-      # ───────────── Sandbox images ─────────────
-      # 只在 build_sandbox = true 时执行
-
+      # Sandbox 默认 - 本地构建
       - name: Build sandbox (default) locally
         if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox') != ''
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.sandbox
-          push: false               # 关键：不要在这里 push 或写远程 tags
+          push: false
           tags: openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -88,25 +89,22 @@ jobs:
         run: |
           local="openclaw-sandbox:${{ env.SANDBOX_SUFFIX }}"
           remote_base="${{ env.IMAGE_BASE }}-sandbox"
-
           docker tag $local $remote_base:${{ env.SANDBOX_SUFFIX }}
           docker tag $local $remote_base:latest
           docker push $remote_base:${{ env.SANDBOX_SUFFIX }}
           docker push $remote_base:latest
-
           if [ -n "${{ inputs.image_tag }}" ]; then
             docker tag $local $remote_base:${{ inputs.image_tag }}
             docker push $remote_base:${{ inputs.image_tag }}
           fi
 
-      # sandbox-common（如果文件存在）
+      # sandbox-common
       - name: Build & push sandbox-common
         if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox-common') != ''
         shell: bash
         run: |
           local="openclaw-sandbox-common:${{ env.SANDBOX_SUFFIX }}"
           remote_base="${{ env.IMAGE_BASE }}-sandbox-common"
-
           docker buildx build --push \
             --tag $local \
             --tag $remote_base:${{ env.SANDBOX_SUFFIX }} \
@@ -114,20 +112,18 @@ jobs:
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             -f Dockerfile.sandbox-common .
-
           if [ -n "${{ inputs.image_tag }}" ]; then
             docker tag $local $remote_base:${{ inputs.image_tag }}
             docker push $remote_base:${{ inputs.image_tag }}
           fi
 
-      # sandbox-browser（类似）
+      # sandbox-browser（同理）
       - name: Build & push sandbox-browser
         if: inputs.build_sandbox == 'true' && hashFiles('Dockerfile.sandbox-browser') != ''
         shell: bash
         run: |
           local="openclaw-sandbox-browser:${{ env.SANDBOX_SUFFIX }}"
           remote_base="${{ env.IMAGE_BASE }}-sandbox-browser"
-
           docker buildx build --push \
             --tag $local \
             --tag $remote_base:${{ env.SANDBOX_SUFFIX }} \
@@ -135,7 +131,6 @@ jobs:
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             -f Dockerfile.sandbox-browser .
-
           if [ -n "${{ inputs.image_tag }}" ]; then
             docker tag $local $remote_base:${{ inputs.image_tag }}
             docker push $remote_base:${{ inputs.image_tag }}
