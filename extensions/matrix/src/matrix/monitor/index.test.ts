@@ -1,4 +1,7 @@
+import path from "node:path";
+import { z } from "openclaw/plugin-sdk/zod";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/plugins/jiti-runtime-api.ts";
 
 const hoisted = vi.hoisted(() => {
   const callOrder: string[] = [];
@@ -31,6 +34,7 @@ const hoisted = vi.hoisted(() => {
   const stopThreadBindingManager = vi.fn();
   const releaseSharedClientInstance = vi.fn(async () => true);
   const setActiveMatrixClient = vi.fn();
+  const setMatrixRuntime = vi.fn();
   return {
     callOrder,
     client,
@@ -41,29 +45,68 @@ const hoisted = vi.hoisted(() => {
     releaseSharedClientInstance,
     resolveTextChunkLimit,
     setActiveMatrixClient,
+    setMatrixRuntime,
     state,
     stopThreadBindingManager,
   };
 });
 
-vi.mock("../../runtime-api.js", () => ({
-  GROUP_POLICY_BLOCKED_LABEL: {
-    room: "room",
-  },
-  mergeAllowlist: ({ existing, additions }: { existing: string[]; additions: string[] }) => [
-    ...existing,
-    ...additions,
-  ],
-  resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
-  resolveThreadBindingMaxAgeMsForChannel: () => 0,
-  resolveAllowlistProviderRuntimeGroupPolicy: () => ({
-    groupPolicy: "allowlist",
-    providerMissingFallbackApplied: false,
-  }),
-  resolveDefaultGroupPolicy: () => "allowlist",
-  summarizeMapping: vi.fn(),
-  warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),
-}));
+vi.mock("../../runtime-api.js", () => {
+  const normalizeAccountId = (value: string | null | undefined) => value?.trim() || "default";
+  return {
+    DEFAULT_ACCOUNT_ID: "default",
+    GROUP_POLICY_BLOCKED_LABEL: {
+      room: "room",
+    },
+    MarkdownConfigSchema: z.any().optional(),
+    PAIRING_APPROVED_MESSAGE: "paired",
+    ToolPolicySchema: z.any().optional(),
+    buildChannelConfigSchema: (schema: unknown) => schema,
+    buildChannelKeyCandidates: () => [],
+    buildProbeChannelStatusSummary: (
+      snapshot: Record<string, unknown>,
+      extra?: Record<string, unknown>,
+    ) => ({
+      ...snapshot,
+      ...(extra ?? {}),
+    }),
+    buildSecretInputSchema: () => z.string(),
+    chunkTextForOutbound: vi.fn((text: string) => [text]),
+    collectStatusIssuesFromLastError: () => [],
+    createActionGate: () => () => true,
+    createReplyPrefixOptions: () => ({}),
+    createTypingCallbacks: () => ({}),
+    formatDocsLink: (input: string) => input,
+    formatZonedTimestamp: () => "2026-03-27T00:00:00.000Z",
+    getAgentScopedMediaLocalRoots: () => [],
+    getSessionBindingService: () => ({}),
+    hasConfiguredSecretInput: (value: unknown) => Boolean(value),
+    mergeAllowlist: ({ existing, additions }: { existing: string[]; additions: string[] }) => [
+      ...existing,
+      ...additions,
+    ],
+    normalizeAccountId,
+    normalizeOptionalAccountId: normalizeAccountId,
+    resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
+    resolveThreadBindingMaxAgeMsForChannel: () => 0,
+    resolveAllowlistProviderRuntimeGroupPolicy: () => ({
+      groupPolicy: "allowlist",
+      providerMissingFallbackApplied: false,
+    }),
+    resolveChannelEntryMatch: () => null,
+    resolveDefaultGroupPolicy: () => "allowlist",
+    resolveOutboundSendDep: () => null,
+    resolveThreadBindingFarewellText: () => null,
+    resolveAckReaction: () => null,
+    readJsonFileWithFallback: vi.fn(),
+    readNumberParam: vi.fn(),
+    readReactionParams: vi.fn(),
+    readStringArrayParam: vi.fn(),
+    readStringParam: vi.fn(),
+    summarizeMapping: vi.fn(),
+    warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),
+  };
+});
 
 vi.mock("../../resolve-targets.js", () => ({
   resolveMatrixTargets: vi.fn(async () => []),
@@ -99,17 +142,22 @@ vi.mock("../../runtime.js", () => ({
       loadWebMedia: vi.fn(),
     },
   }),
+  setMatrixRuntime: hoisted.setMatrixRuntime,
 }));
 
-vi.mock("../accounts.js", () => ({
-  resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
-  resolveMatrixAccount: () => ({
-    accountId: "default",
-    config: {
-      dm: {},
-    },
-  }),
-}));
+vi.mock("../accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../accounts.js")>();
+  return {
+    ...actual,
+    resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
+    resolveMatrixAccount: () => ({
+      accountId: "default",
+      config: {
+        dm: {},
+      },
+    }),
+  };
+});
 
 vi.mock("../active-client.js", () => ({
   setActiveMatrixClient: hoisted.setActiveMatrixClient,
@@ -225,9 +273,20 @@ vi.mock("./startup-verification.js", () => ({
   ensureMatrixStartupVerification: vi.fn(),
 }));
 
+const { monitorMatrixProvider } = await import("./index.js");
+
 describe("monitorMatrixProvider", () => {
+  async function startMonitorAndAbortAfterStartup(): Promise<void> {
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+    await vi.waitFor(() => {
+      expect(hoisted.callOrder).toContain("start-client");
+    });
+    abortController.abort();
+    await monitorPromise;
+  }
+
   beforeEach(() => {
-    vi.resetModules();
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
@@ -247,12 +306,20 @@ describe("monitorMatrixProvider", () => {
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
   });
 
-  it("registers Matrix thread bindings before starting the client", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
+  it("returns immediately when the abort signal is already canceled", async () => {
     const abortController = new AbortController();
     abortController.abort();
 
     await monitorMatrixProvider({ abortSignal: abortController.signal });
+
+    expect(hoisted.callOrder).toEqual([]);
+    expect(hoisted.resolveTextChunkLimit).not.toHaveBeenCalled();
+    expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
+    expect(hoisted.setActiveMatrixClient).not.toHaveBeenCalled();
+  });
+
+  it("registers Matrix thread bindings before starting the client", async () => {
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.callOrder).toEqual([
       "prepare-client",
@@ -264,11 +331,7 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("resolves text chunk limit for the effective Matrix account", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
-    const abortController = new AbortController();
-    abortController.abort();
-
-    await monitorMatrixProvider({ abortSignal: abortController.signal });
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.resolveTextChunkLimit).toHaveBeenCalledWith(
       expect.anything(),
@@ -278,7 +341,6 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("cleans up thread bindings and shared clients when startup fails", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
     hoisted.state.startClientError = new Error("start failed");
 
     await expect(monitorMatrixProvider()).rejects.toThrow("start failed");
@@ -292,11 +354,7 @@ describe("monitorMatrixProvider", () => {
 
   it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
     hoisted.client.hasPersistedSyncState.mockReturnValue(true);
-    const { monitorMatrixProvider } = await import("./index.js");
-    const abortController = new AbortController();
-    abortController.abort();
-
-    await monitorMatrixProvider({ abortSignal: abortController.signal });
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.createMatrixRoomMessageHandler).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -306,7 +364,6 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("stops sync, drains decryptions, then waits for in-flight handlers before persisting", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
     const abortController = new AbortController();
     let resolveHandler: (() => void) | null = null;
 
@@ -376,5 +433,76 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder.indexOf("stop-deduper")).toBeLessThan(
       hoisted.callOrder.indexOf("release-client"),
     );
+  });
+});
+
+describe("matrix plugin registration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("loads the matrix runtime api through Jiti", () => {
+    const runtimeApiPath = path.join(process.cwd(), "extensions", "matrix", "runtime-api.ts");
+    expect(
+      loadRuntimeApiExportTypesViaJiti({
+        modulePath: runtimeApiPath,
+        exportNames: [
+          "requiresExplicitMatrixDefaultAccount",
+          "resolveMatrixDefaultOrOnlyAccountId",
+        ],
+        realPluginSdkSpecifiers: [],
+      }),
+    ).toEqual({
+      requiresExplicitMatrixDefaultAccount: "function",
+      resolveMatrixDefaultOrOnlyAccountId: "function",
+    });
+  }, 240_000);
+
+  it("loads the matrix src runtime api through Jiti without duplicate export errors", () => {
+    const runtimeApiPath = path.join(
+      process.cwd(),
+      "extensions",
+      "matrix",
+      "src",
+      "runtime-api.ts",
+    );
+    expect(
+      loadRuntimeApiExportTypesViaJiti({
+        modulePath: runtimeApiPath,
+        exportNames: [],
+        realPluginSdkSpecifiers: [
+          "openclaw/plugin-sdk/account-helpers",
+          "openclaw/plugin-sdk/allow-from",
+          "openclaw/plugin-sdk/channel-config-helpers",
+          "openclaw/plugin-sdk/channel-policy",
+          "openclaw/plugin-sdk/core",
+          "openclaw/plugin-sdk/directory-runtime",
+          "openclaw/plugin-sdk/extension-shared",
+          "openclaw/plugin-sdk/irc",
+          "openclaw/plugin-sdk/signal",
+          "openclaw/plugin-sdk/status-helpers",
+          "openclaw/plugin-sdk/text-runtime",
+        ],
+      }),
+    ).toEqual({});
+  }, 240_000);
+
+  it("registers the channel without bootstrapping crypto runtime", async () => {
+    const { default: matrixPlugin } = await import("../../../index.js");
+    const runtime = {} as never;
+    const registerChannel = vi.fn();
+    matrixPlugin.register({
+      runtime,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      registerChannel,
+    } as never);
+
+    expect(hoisted.setMatrixRuntime).toHaveBeenCalledWith(runtime);
+    expect(registerChannel).toHaveBeenCalledWith({ plugin: expect.any(Object) });
   });
 });
