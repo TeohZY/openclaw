@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
-import type { MatrixRoomConfig, ReplyToMode } from "../../types.js";
+import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
@@ -30,7 +30,10 @@ type MatrixHandlerTestHarnessOptions = {
   groupPolicy?: "open" | "allowlist" | "disabled";
   replyToMode?: ReplyToMode;
   threadReplies?: "off" | "inbound" | "always";
-  streaming?: "partial" | "off";
+  dmThreadReplies?: "off" | "inbound" | "always";
+  dmSessionScope?: "per-user" | "per-room";
+  streaming?: MatrixStreamingMode;
+  blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   textLimit?: number;
@@ -192,16 +195,18 @@ export function createMatrixHandlerTestHarness(
     } as never,
     cfg: (options.cfg ?? {}) as never,
     accountId: options.accountId ?? "ops",
-    runtime: (options.runtime ??
+    runtime:
+      options.runtime ??
       ({
         error: () => {},
-      } as RuntimeEnv)) as RuntimeEnv,
-    logger: (options.logger ??
+      } as RuntimeEnv),
+    logger:
+      options.logger ??
       ({
         info: () => {},
         warn: () => {},
         error: () => {},
-      } as RuntimeLogger)) as RuntimeLogger,
+      } as RuntimeLogger),
     logVerboseMessage: options.logVerboseMessage ?? (() => {}),
     allowFrom: options.allowFrom ?? [],
     groupAllowFrom: options.groupAllowFrom ?? [],
@@ -211,7 +216,10 @@ export function createMatrixHandlerTestHarness(
     groupPolicy: options.groupPolicy ?? "open",
     replyToMode: options.replyToMode ?? "off",
     threadReplies: options.threadReplies ?? "inbound",
+    dmThreadReplies: options.dmThreadReplies,
+    dmSessionScope: options.dmSessionScope,
     streaming: options.streaming ?? "off",
+    blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy: options.dmPolicy ?? "open",
     textLimit: options.textLimit ?? 8_000,
